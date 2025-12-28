@@ -52,3 +52,8 @@ To enrich an existing JSONL file with careers URLs in a separate pass:
 ```
 python3 startup/enrich_careers.py --input data/startups.jsonl --output data/startups_with_careers.jsonl --csv-output data/startups_with_careers.csv
 ```
+
+For large runs, use resume + append (processes in batches and tracks progress):
+```
+python3 startup/enrich_careers.py --input data/startups.jsonl --output data/startups_with_careers.jsonl --resume --max 100
+```
