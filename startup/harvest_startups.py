@@ -418,7 +418,9 @@ def find_careers_url(fetcher: Fetcher, website: str) -> Optional[str]:
     return None
 
 
-def harvest_sources(config: Dict[str, Any], fetcher: Fetcher) -> List[Dict[str, Any]]:
+def harvest_sources(
+    config: Dict[str, Any], fetcher: Fetcher, max_records: Optional[int] = None
+) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for source in config.get("sources", []):
         source_type = source.get("type")
@@ -436,6 +438,8 @@ def harvest_sources(config: Dict[str, Any], fetcher: Fetcher) -> List[Dict[str, 
 
         for record in records:
             results.append(record)
+            if max_records is not None and len(results) >= max_records:
+                return results
     return results
 
 
@@ -483,7 +487,8 @@ def main() -> int:
         strict_robots=bool(config.get("strict_robots", True)),
     )
 
-    records = harvest_sources(config, fetcher)
+    max_records = args.max if args.max > 0 else None
+    records = harvest_sources(config, fetcher, max_records=max_records)
     records = dedupe_records(records)
 
     if not args.no_enrich and config.get("enrich_careers", True):
