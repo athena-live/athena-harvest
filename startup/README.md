@@ -18,6 +18,7 @@ Supported source types:
 - `csv`: local or hosted CSV with `name`, `website`, `info` columns
 - `json`: local or hosted JSON list of objects
 - `directory`: HTML directory page with CSS selectors
+- `yc_location`: Y Combinator location listing page (fetches company page for website)
 
 Example `directory` source fields:
 - `url`: page to crawl

@@ -26,6 +26,12 @@
       "next_page_selector": "a.next"
     },
     {
+      "type": "yc_location",
+      "name": "yc_sf_bay",
+      "url": "https://www.ycombinator.com/companies/location/san-francisco-bay-area",
+      "fetch_company_pages": true
+    },
+    {
       "type": "json",
       "name": "json_feed",
       "url": "https://data.example.com/startups.json",

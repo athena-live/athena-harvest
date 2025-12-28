@@ -106,6 +106,13 @@ class Fetcher:
         return resp.status_code < 400
 
 
+def make_soup(html: str) -> BeautifulSoup:
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
+
+
 def load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -157,7 +164,7 @@ def parse_directory_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable
         html = fetcher.get_text(url)
         if not html:
             break
-        soup = BeautifulSoup(html, "lxml")
+        soup = make_soup(html)
         for item in soup.select(item_selector):
             name = select_text(item, name_selector)
             website = select_attr(item, website_selector, "href")
@@ -251,6 +258,135 @@ def parse_json_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable[Dict
         }
 
 
+def _yc_company_links(soup: BeautifulSoup) -> List[str]:
+    links: List[str] = []
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href", "")
+        if not href.startswith("/companies/"):
+            continue
+        if href.startswith("/companies/location"):
+            continue
+        if href.count("/") != 2:
+            continue
+        links.append(href)
+    return list(dict.fromkeys(links))
+
+
+def _yc_card_for_link(soup: BeautifulSoup, href: str) -> Optional[Any]:
+    anchor = soup.find("a", href=href)
+    if not anchor:
+        return None
+    return anchor
+
+
+def _yc_extract_metadata(card: Any) -> Dict[str, Optional[str]]:
+    data: Dict[str, Optional[str]] = {
+        "batch": None,
+        "status": None,
+        "employees": None,
+        "location": None,
+        "tags": None,
+    }
+    if not card:
+        return data
+
+    batch = None
+    for span in card.find_all("span"):
+        text = span.get_text(" ", strip=True)
+        if text and (text.startswith("W") or text.startswith("S")) and len(text) == 5:
+            batch = text
+            break
+    data["batch"] = batch
+
+    meta_items = [s.get_text(" ", strip=True) for s in card.find_all("span", class_="text-gray-700")]
+    if meta_items:
+        data["status"] = meta_items[0] if len(meta_items) > 0 else None
+        data["employees"] = meta_items[1] if len(meta_items) > 1 else None
+        data["location"] = meta_items[2] if len(meta_items) > 2 else None
+
+    tag_container = card.find("div", class_="mt-2")
+    if tag_container:
+        tags = [t.get_text(" ", strip=True) for t in tag_container.find_all("div") if t.get_text(strip=True)]
+        data["tags"] = ", ".join(tags) if tags else None
+
+    return data
+
+
+def _yc_extract_name(card: Any) -> Optional[str]:
+    if not card:
+        return None
+    name_span = card.find("span", class_="text-2xl")
+    if name_span:
+        return name_span.get_text(" ", strip=True)
+    bold_span = card.find("span", class_="font-bold")
+    if bold_span:
+        return bold_span.get_text(" ", strip=True)
+    return None
+
+
+def _yc_extract_description(card: Any) -> Optional[str]:
+    if not card:
+        return None
+    desc = card.find("div", class_="text-gray-600")
+    if desc:
+        return desc.get_text(" ", strip=True)
+    return None
+
+
+def _yc_extract_website(fetcher: Fetcher, company_url: str) -> Optional[str]:
+    html = fetcher.get_text(company_url)
+    if not html:
+        return None
+    soup = make_soup(html)
+    for anchor in soup.find_all("a", href=True):
+        aria = (anchor.get("aria-label") or "").strip().lower()
+        if aria == "website":
+            return anchor.get("href")
+    for anchor in soup.find_all("a", href=True):
+        text = anchor.get_text(" ", strip=True).lower()
+        if text == "website":
+            return anchor.get("href")
+    return None
+
+
+def parse_yc_location_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable[Dict[str, Any]]:
+    url = source.get("url")
+    if not url:
+        return []
+
+    html = fetcher.get_text(url)
+    if not html:
+        return []
+    soup = make_soup(html)
+
+    company_links = _yc_company_links(soup)
+    fetch_company_pages = bool(source.get("fetch_company_pages", True))
+
+    for href in company_links:
+        card = _yc_card_for_link(soup, href)
+        company_url = urllib.parse.urljoin(url, href)
+        name = _yc_extract_name(card)
+        description = _yc_extract_description(card)
+        meta = _yc_extract_metadata(card)
+        website = None
+        if fetch_company_pages:
+            website = _yc_extract_website(fetcher, company_url)
+
+        yield {
+            "name": name,
+            "website": normalize_url(website) if website else None,
+            "info": description,
+            "source": source.get("name", "ycombinator"),
+            "source_url": url,
+            "yc_url": company_url,
+            "batch": meta.get("batch"),
+            "status": meta.get("status"),
+            "employees": meta.get("employees"),
+            "location": meta.get("location"),
+            "tags": meta.get("tags"),
+        }
+
+
 def is_career_link(text: str, href: str) -> bool:
     if not (text or href):
         return False
@@ -266,7 +402,7 @@ def find_careers_url(fetcher: Fetcher, website: str) -> Optional[str]:
     html = fetcher.get_text(homepage)
     if not html:
         return None
-    soup = BeautifulSoup(html, "lxml")
+    soup = make_soup(html)
     for anchor in soup.find_all("a", href=True):
         text = anchor.get_text(" ", strip=True)
         href = anchor.get("href")
@@ -292,6 +428,8 @@ def harvest_sources(config: Dict[str, Any], fetcher: Fetcher) -> List[Dict[str, 
             records = parse_csv_source(source, fetcher)
         elif source_type == "json":
             records = parse_json_source(source, fetcher)
+        elif source_type == "yc_location":
+            records = parse_yc_location_source(source, fetcher)
         else:
             print(f"Skipping unknown source type: {source_type}")
             continue
@@ -319,7 +457,9 @@ def write_outputs(records: List[Dict[str, Any]], output_path: str, csv_path: Opt
             fh.write(json.dumps(record, ensure_ascii=True) + "\n")
 
     if csv_path:
-        fieldnames = ["name", "website", "info", "careers_url", "source", "source_url", "collected_at"]
+        base_fields = ["name", "website", "info", "careers_url", "source", "source_url", "collected_at"]
+        extra_fields = sorted({key for record in records for key in record.keys()} - set(base_fields))
+        fieldnames = base_fields + extra_fields
         with open(csv_path, "w", encoding="utf-8", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()

@@ -4,5 +4,12 @@
   "timeout_seconds": 15.0,
   "strict_robots": true,
   "enrich_careers": true,
-  "sources": []
+  "sources": [
+    {
+      "type": "yc_location",
+      "name": "yc_sf_bay",
+      "url": "https://www.ycombinator.com/companies/location/san-francisco-bay-area",
+      "fetch_company_pages": true
+    }
+  ]
 }
