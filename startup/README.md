@@ -18,7 +18,7 @@ Supported source types:
 - `csv`: local or hosted CSV with `name`, `website`, `info` columns
 - `json`: local or hosted JSON list of objects
 - `directory`: HTML directory page with CSS selectors
-- `yc_location`: Y Combinator location listing page (fetches company page for website)
+- `yc_location`: Y Combinator location listing page (uses Inertia data, supports pagination)
 
 Example `directory` source fields:
 - `url`: page to crawl
@@ -27,6 +27,11 @@ Example `directory` source fields:
 - `website_selector`: selector for the company website link within the card
 - `info_selector`: selector for the description within the card
 - `next_page_selector`: selector for pagination link (optional)
+
+`yc_location` fields:
+- `url`: YC location URL
+- `max_pages`: optional limit for pagination
+- `fetch_company_pages`: optional fallback to fetch company page if website is missing
 
 ## Output
 The harvester writes JSONL records with:

@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import html as html_lib
 import json
+import re
 import time
 import urllib.parse
 import urllib.robotparser
@@ -17,21 +19,30 @@ import requests
 from bs4 import BeautifulSoup
 
 DEFAULT_USER_AGENT = "AthenaHarvestBot/1.0 (+contact@example.com)"
-CAREER_KEYWORDS = [
+STRONG_CAREER_KEYWORDS = [
     "careers",
     "career",
     "jobs",
     "job",
-    "join us",
-    "join",
-    "work with",
-    "work at",
     "open roles",
     "openings",
     "vacancies",
+    "join us",
+    "work with",
+    "work at",
+]
+WEAK_CAREER_KEYWORDS = [
     "employment",
     "hiring",
 ]
+CAREERS_PATH_PATTERN = re.compile(
+    r"/(careers?|jobs?|open-roles|openings|vacancies|join-us|join|work-with|work-at|employment)",
+    re.IGNORECASE,
+)
+CAREERS_EXCLUDE_PATTERN = re.compile(
+    r"/(blog|news|press|media|events|guide|learn|resources|legal|privacy|terms|policy)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -111,6 +122,28 @@ def make_soup(html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "lxml")
     except Exception:
         return BeautifulSoup(html, "html.parser")
+
+
+def parse_inertia_data_page(html_text: str) -> Optional[Dict[str, Any]]:
+    soup = make_soup(html_text)
+    root = soup.find(attrs={"data-page": True})
+    if not root:
+        return None
+    raw = root.get("data-page")
+    if not raw:
+        return None
+    try:
+        return json.loads(html_lib.unescape(raw))
+    except json.JSONDecodeError:
+        return None
+
+
+def set_query_param(url: str, key: str, value: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    query = dict(urllib.parse.parse_qsl(parsed.query))
+    query[key] = value
+    new_query = urllib.parse.urlencode(query)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -258,81 +291,6 @@ def parse_json_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable[Dict
         }
 
 
-def _yc_company_links(soup: BeautifulSoup) -> List[str]:
-    links: List[str] = []
-    for anchor in soup.find_all("a", href=True):
-        href = anchor.get("href", "")
-        if not href.startswith("/companies/"):
-            continue
-        if href.startswith("/companies/location"):
-            continue
-        if href.count("/") != 2:
-            continue
-        links.append(href)
-    return list(dict.fromkeys(links))
-
-
-def _yc_card_for_link(soup: BeautifulSoup, href: str) -> Optional[Any]:
-    anchor = soup.find("a", href=href)
-    if not anchor:
-        return None
-    return anchor
-
-
-def _yc_extract_metadata(card: Any) -> Dict[str, Optional[str]]:
-    data: Dict[str, Optional[str]] = {
-        "batch": None,
-        "status": None,
-        "employees": None,
-        "location": None,
-        "tags": None,
-    }
-    if not card:
-        return data
-
-    batch = None
-    for span in card.find_all("span"):
-        text = span.get_text(" ", strip=True)
-        if text and (text.startswith("W") or text.startswith("S")) and len(text) == 5:
-            batch = text
-            break
-    data["batch"] = batch
-
-    meta_items = [s.get_text(" ", strip=True) for s in card.find_all("span", class_="text-gray-700")]
-    if meta_items:
-        data["status"] = meta_items[0] if len(meta_items) > 0 else None
-        data["employees"] = meta_items[1] if len(meta_items) > 1 else None
-        data["location"] = meta_items[2] if len(meta_items) > 2 else None
-
-    tag_container = card.find("div", class_="mt-2")
-    if tag_container:
-        tags = [t.get_text(" ", strip=True) for t in tag_container.find_all("div") if t.get_text(strip=True)]
-        data["tags"] = ", ".join(tags) if tags else None
-
-    return data
-
-
-def _yc_extract_name(card: Any) -> Optional[str]:
-    if not card:
-        return None
-    name_span = card.find("span", class_="text-2xl")
-    if name_span:
-        return name_span.get_text(" ", strip=True)
-    bold_span = card.find("span", class_="font-bold")
-    if bold_span:
-        return bold_span.get_text(" ", strip=True)
-    return None
-
-
-def _yc_extract_description(card: Any) -> Optional[str]:
-    if not card:
-        return None
-    desc = card.find("div", class_="text-gray-600")
-    if desc:
-        return desc.get_text(" ", strip=True)
-    return None
-
-
 def _yc_extract_website(fetcher: Fetcher, company_url: str) -> Optional[str]:
     html = fetcher.get_text(company_url)
     if not html:
@@ -393,48 +351,85 @@ def _yc_extract_website(fetcher: Fetcher, company_url: str) -> Optional[str]:
 
 
 def parse_yc_location_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable[Dict[str, Any]]:
-    url = source.get("url")
-    if not url:
+    base_url = source.get("url")
+    if not base_url:
         return []
 
-    html = fetcher.get_text(url)
-    if not html:
-        return []
-    soup = make_soup(html)
+    max_pages = source.get("max_pages")
+    fetch_company_pages = bool(source.get("fetch_company_pages", False))
 
-    company_links = _yc_company_links(soup)
-    fetch_company_pages = bool(source.get("fetch_company_pages", True))
+    page = 1
+    total_pages = None
+    while True:
+        page_url = base_url if page == 1 else set_query_param(base_url, "page", str(page))
+        html = fetcher.get_text(page_url)
+        if not html:
+            break
+        data = parse_inertia_data_page(html)
+        if not data:
+            break
 
-    for href in company_links:
-        card = _yc_card_for_link(soup, href)
-        company_url = urllib.parse.urljoin(url, href)
-        name = _yc_extract_name(card)
-        description = _yc_extract_description(card)
-        meta = _yc_extract_metadata(card)
-        website = None
-        if fetch_company_pages:
-            website = _yc_extract_website(fetcher, company_url)
+        props = data.get("props", {})
+        companies = props.get("companies", [])
+        total_pages = props.get("totalPages") or total_pages
+        for company in companies:
+            if not isinstance(company, dict):
+                continue
+            slug = company.get("slug")
+            company_url = company.get("ycdc_company_url") or (
+                f"https://www.ycombinator.com/companies/{slug}" if slug else None
+            )
+            website = company.get("website")
+            if not website and fetch_company_pages and company_url:
+                website = _yc_extract_website(fetcher, company_url)
+            tags = company.get("tags") or []
+            yield {
+                "name": company.get("name"),
+                "website": normalize_url(website) if website else None,
+                "info": company.get("one_liner") or company.get("long_description"),
+                "source": source.get("name", "ycombinator"),
+                "source_url": page_url,
+                "yc_url": company_url,
+                "batch": (company.get("batch_name") or "").upper() or None,
+                "status": company.get("ycdc_status"),
+                "employees": str(company.get("team_size")) if company.get("team_size") else None,
+                "location": company.get("location") or company.get("city"),
+                "tags": ", ".join(tags) if tags else None,
+                "linkedin_url": company.get("linkedin_url"),
+                "twitter_url": company.get("twitter_url"),
+                "cb_url": company.get("cb_url"),
+            }
 
-        yield {
-            "name": name,
-            "website": normalize_url(website) if website else None,
-            "info": description,
-            "source": source.get("name", "ycombinator"),
-            "source_url": url,
-            "yc_url": company_url,
-            "batch": meta.get("batch"),
-            "status": meta.get("status"),
-            "employees": meta.get("employees"),
-            "location": meta.get("location"),
-            "tags": meta.get("tags"),
-        }
+        if total_pages is None or page >= total_pages:
+            break
+        page += 1
+        if max_pages and page > max_pages:
+            break
 
 
 def is_career_link(text: str, href: str) -> bool:
     if not (text or href):
         return False
-    blob = f"{text} {href}".lower()
-    return any(keyword in blob for keyword in CAREER_KEYWORDS)
+    href_lower = (href or "").lower()
+    text_lower = (text or "").lower()
+    if CAREERS_EXCLUDE_PATTERN.search(href_lower):
+        return False
+    if CAREERS_PATH_PATTERN.search(href_lower):
+        return True
+    if any(keyword in text_lower for keyword in STRONG_CAREER_KEYWORDS):
+        return True
+    if any(keyword in text_lower for keyword in WEAK_CAREER_KEYWORDS):
+        return bool(CAREERS_PATH_PATTERN.search(href_lower))
+    return False
+
+
+def _page_looks_like_careers(html: str) -> bool:
+    soup = make_soup(html)
+    title = soup.title.get_text(" ", strip=True).lower() if soup.title else ""
+    h1 = soup.find("h1")
+    h1_text = h1.get_text(" ", strip=True).lower() if h1 else ""
+    blob = f"{title} {h1_text}"
+    return any(keyword in blob for keyword in STRONG_CAREER_KEYWORDS)
 
 
 def find_careers_url(fetcher: Fetcher, website: str) -> Optional[str]:
@@ -456,7 +451,8 @@ def find_careers_url(fetcher: Fetcher, website: str) -> Optional[str]:
 
     for path in ["/careers", "/careers/", "/jobs", "/jobs/", "/join", "/join-us", "/company/careers"]:
         probe = urllib.parse.urljoin(homepage, path)
-        if fetcher.head_ok(probe):
+        html_probe = fetcher.get_text(probe)
+        if html_probe and _page_looks_like_careers(html_probe):
             return probe
     return None
 
@@ -539,7 +535,7 @@ def main() -> int:
             careers_url = find_careers_url(fetcher, record.get("website"))
             record["careers_url"] = careers_url
 
-    now = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for record in records:
         record.setdefault("careers_url", None)
         record["collected_at"] = now
