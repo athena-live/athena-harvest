@@ -1,0 +1,40 @@
+{
+  "user_agent": "AthenaHarvestBot/1.0 (+contact@example.com)",
+  "rate_limit_seconds": 1.0,
+  "timeout_seconds": 15.0,
+  "strict_robots": true,
+  "enrich_careers": true,
+  "sources": [
+    {
+      "type": "csv",
+      "name": "local_seed",
+      "path": "startup/sources/seed_startups.csv",
+      "columns": {
+        "name": "name",
+        "website": "website",
+        "info": "info"
+      }
+    },
+    {
+      "type": "directory",
+      "name": "example_directory",
+      "url": "https://directory.example.com/startups",
+      "item_selector": ".startup-card",
+      "name_selector": ".startup-name",
+      "website_selector": "a.startup-website",
+      "info_selector": ".startup-description",
+      "next_page_selector": "a.next"
+    },
+    {
+      "type": "json",
+      "name": "json_feed",
+      "url": "https://data.example.com/startups.json",
+      "root": "items",
+      "fields": {
+        "name": "name",
+        "website": "website",
+        "info": "description"
+      }
+    }
+  ]
+}

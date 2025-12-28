@@ -1,0 +1,8 @@
+{
+  "user_agent": "AthenaHarvestBot/1.0 (+contact@example.com)",
+  "rate_limit_seconds": 1.0,
+  "timeout_seconds": 15.0,
+  "strict_robots": true,
+  "enrich_careers": true,
+  "sources": []
+}
