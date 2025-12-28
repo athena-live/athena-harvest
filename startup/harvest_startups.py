@@ -346,7 +346,50 @@ def _yc_extract_website(fetcher: Fetcher, company_url: str) -> Optional[str]:
         text = anchor.get_text(" ", strip=True).lower()
         if text == "website":
             return anchor.get("href")
-    return None
+
+    blacklist = {
+        "twitter.com",
+        "x.com",
+        "linkedin.com",
+        "facebook.com",
+        "instagram.com",
+        "youtube.com",
+        "crunchbase.com",
+        "angel.co",
+        "wellfound.com",
+        "medium.com",
+        "substack.com",
+        "forbes.com",
+        "techcrunch.com",
+        "cnbc.com",
+        "bloomberg.com",
+        "wsj.com",
+        "nytimes.com",
+    }
+
+    candidates: List[str] = []
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href")
+        if not href or not href.startswith("http"):
+            continue
+        parsed = urllib.parse.urlparse(href)
+        domain = parsed.netloc.lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        if domain in blacklist:
+            continue
+        text = anchor.get_text(" ", strip=True)
+        text_lower = text.lower()
+        if domain and domain in text_lower:
+            return href
+        if text.strip() == href:
+            return href
+        if text and " " not in text and "." in text:
+            candidates.append(href)
+        else:
+            candidates.append(href)
+
+    return candidates[0] if candidates else None
 
 
 def parse_yc_location_source(source: Dict[str, Any], fetcher: Fetcher) -> Iterable[Dict[str, Any]]:
