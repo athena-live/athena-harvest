@@ -46,3 +46,9 @@ The harvester writes JSONL records with:
 - Respect `robots.txt` and terms for each source.
 - You can disable careers enrichment with `--no-enrich` or set `"enrich_careers": false`.
 - If you want an API-based source (Crunchbase, AngelList, etc.), tell me which provider and I will add a connector that reads your API key from env.
+
+## Careers enrichment pass
+To enrich an existing JSONL file with careers URLs in a separate pass:
+```
+python3 startup/enrich_careers.py --input data/startups.jsonl --output data/startups_with_careers.jsonl --csv-output data/startups_with_careers.csv
+```
